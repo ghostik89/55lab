@@ -108,6 +108,7 @@ Aes256::Aes256(const ByteArray& key)
         , m_buffer_pos(0)
         , m_remainingLength(0)
 {
+    #pragma omp parallel for num_threads(4)
     for(ByteArray::size_type i = 0; i < m_key.size(); ++i)
         m_key[i] = key[i];
 }
@@ -122,8 +123,8 @@ ByteArray::size_type Aes256::encrypt(const ByteArray& key, const ByteArray& plai
     aes.encrypt_start(plain.size(), encrypted);
     aes.encrypt_continue(plain, encrypted);
     aes.encrypt_end(encrypted);
-    using namespace std::chrono_literals;
-    std::this_thread::sleep_for(150ms);
+//    using namespace std::chrono_literals;
+//    std::this_thread::sleep_for(10ms);
 
     return encrypted.size();
 }
@@ -134,8 +135,11 @@ ByteArray::size_type Aes256::encrypt_start(const ByteArray::size_type plain_leng
 
     // Generate salt
     ByteArray::iterator it = m_salt.begin(), itEnd = m_salt.end();
-    while (it != itEnd)
-        *(it++) = (rand() & 0xFF);
+
+    #pragma omp section
+        while (it != itEnd)
+        #pragma omp flush(it)
+            *(it++) = (rand() & 0xFF);
 
     // Calculate padding
     ByteArray::size_type padding = 0;
@@ -175,6 +179,7 @@ void Aes256::check_and_encrypt_buffer(ByteArray& encrypted)
     if (m_buffer_pos == BLOCK_SIZE) {
         encrypt(m_buffer);
 
+        #pragma omp parallel for num_threads(4)
         for (m_buffer_pos = 0; m_buffer_pos < BLOCK_SIZE; ++m_buffer_pos) {
             encrypted.push_back(m_buffer[m_buffer_pos]);
             --m_remainingLength;
@@ -192,6 +197,7 @@ ByteArray::size_type Aes256::encrypt_end(ByteArray& encrypted)
 
         encrypt(m_buffer);
 
+        #pragma omp parallel for num_threads(4)
         for (m_buffer_pos = 0; m_buffer_pos < BLOCK_SIZE; ++m_buffer_pos) {
             encrypted.push_back(m_buffer[m_buffer_pos]);
             --m_remainingLength;
@@ -209,6 +215,8 @@ void Aes256::encrypt(unsigned char* buffer)
 
     copy_key();
     add_round_key(buffer, 0);
+
+    #pragma omp parallel for num_threads(4)
     for(i = 1, rcon = 1; i < NUM_ROUNDS; ++i)
     {
         sub_bytes(buffer);
@@ -235,6 +243,7 @@ void Aes256::expand_enc_key(unsigned char* rc)
     m_rkey[3] = m_rkey[3] ^ sbox[m_rkey[28]];
     *rc = FE(*rc);
 
+    #pragma omp parallel for num_threads(4)
     for(i = 4; i < 16; i += 4) {
         m_rkey[i] = m_rkey[i] ^ m_rkey[i-4];
         m_rkey[i+1] = m_rkey[i+1] ^ m_rkey[i-3];
@@ -268,8 +277,11 @@ void Aes256::copy_key()
 {
     ByteArray::size_type i;
 
+    #pragma omp parallel for num_threads(4)
     for (i = 0; i < m_key.size(); ++i)
         m_rkey[i] = m_key[i];
+
+    #pragma omp parallel for num_threads(4)
     for (i = 0; i < m_salt.size(); ++i)
         m_rkey[i + m_key.size()] = m_salt[i];
 }
@@ -312,6 +324,7 @@ void Aes256::mix_columns(unsigned char* buffer)
 {
     register unsigned char i, a, b, c, d, e;
 
+    #pragma omp parallel for num_threads(4)
     for (i = 0; i < 16; i += 4)
     {
         a = buffer[i];
@@ -1275,18 +1288,7 @@ int main() {
     auto ms_int = duration_cast<milliseconds>(t2 - t1);
     duration<double, std::milli> ms_double = t2 - t1;
 
-    std::cout << ms_int.count() << "ms\n";
     std::cout << ms_double.count() << "ms\n";
-//    if (enc_len != ENC_SIZE) {
-//        std::cerr << "Wrong encrypted length: " << enc_len << " instead of " << ENC_SIZE << std::endl;
-//        return -1;
-//    }
-
-//    for (unsigned char i = 0; i < ENC_SIZE; ++i)
-//        if (enc[i] != test_enc[i]) {
-//            std::cerr << "Wrong encrypted byte in position " << i << ": found " << std::hex << (int)enc[i] << " instead of " << (int)test_enc[i] << std::endl;
-//            return -2;
-//        }
 
     std::cout << " Done!" << std::endl;
     return 0;
